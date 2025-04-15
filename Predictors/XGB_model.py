@@ -92,8 +92,8 @@ class XGB_Predictor(Predictor):
             eval_metric=['rmse', 'mae'],
 
             # use this two lines to enable GPU
-            #tree_method  = 'hist',
-            #device       = 'cuda',
+            # tree_method  = 'hist',
+            # device       = 'cuda',
                             )
 
         model.fit(X_train, y_train)
