@@ -26,54 +26,80 @@ def conditional_print(verbose, *args, **kwargs):
     if verbose:
         print(*args, **kwargs)
 
-def adf_test(df, alpha=0.05, verbose=False):
+def adf_test(df, alpha=0.05, max_diff=3):
     """
-    Performs the Augmented Dickey-Fuller test to determine if a series is stationary and provides detailed output.
+    Esegue il test di Dickey-Fuller (ADF) per valutare se una serie è stazionaria
+    e restituisce il numero di differenziazioni necessarie.
+    Stampa inoltre i dettagli dei risultati ad ogni step.
 
-    :param df: The time series data as a DataFrame.
-    :param alpha: The significance level for the test to determine stationarity.
-    :param verbose: Boolean flag that determines whether to print detailed results.
-    :return: The number of differences needed to make the series stationary.
+    Parametri
+    ----------
+    df : pandas.DataFrame o pandas.Series
+        La serie temporale da analizzare. Se è un DataFrame, si considera la prima colonna.
+    alpha : float, opzionale
+        Il livello di significatività desiderato (default=0.05).
+    max_diff : int, opzionale
+        Numero massimo di differenziazioni da provare (default=3).
+
+    Ritorno
+    -------
+    int
+        Il numero di differenziazioni richiesto per rendere stazionaria la serie
+        (se entro max_diff). Se non viene raggiunta la stazionarietà entro max_diff,
+        restituisce max_diff.
     """
-    d = 0
+    # Se df è un DataFrame multi-colonna, consideriamo la prima colonna
+    if isinstance(df, pd.DataFrame):
+        df = df.iloc[:, 0]
+
+    print("Test di stazionarietà in corso...\n")
+
+    # Mappa alpha al corrispondente valore critico
+    critical_mapping = {0.01: '1%', 0.05: '5%', 0.1: '10%'}
+    crit_key = critical_mapping.get(alpha, '5%')
+
+    d = 0  # contatore di differenziazioni
+
+    # -- Test sulla serie originale (d=0)
     adf_result = adfuller(df.dropna())
-    p_value = adf_result[1]
-    adf_statistic = adf_result[0]
-    
-    if p_value < alpha and adf_statistic < adf_result[4]['5%']:
-        conditional_print(verbose, "The series is stationary.")
+    adf_stat, p_value = adf_result[0], adf_result[1]
+    critical_val = adf_result[4][crit_key]
+
+    print(f"Test su serie originale (d={d}):")
+    print(f"  ADF Statistic: {adf_stat:.4f}")
+    print(f"  p-value:       {p_value:.10f}")
+    print("  Valori Critici:")
+    for k, v in adf_result[4].items():
+        print(f"    {k}: {v}")
+
+    # Verifica di stazionarietà
+    if p_value < alpha and adf_stat < critical_val:
+        print("\nLa serie è già stazionaria (d=0).")
         return d
 
-    conditional_print(verbose, 'Stationarity test in progress...\n')
-    
-    df_diff = df.diff()
-    while True:
+    # -- Itera con differenze successive fino a max_diff
+    df_diff = df.copy()
+    for i in range(1, max_diff + 1):
+        d = i
+        df_diff = df_diff.diff()  # differenza cumulativa
+
         adf_result = adfuller(df_diff.dropna())
-        
-        conditional_print(verbose, f"\nIteration #{d}:\n")
-        conditional_print(verbose, "ADF Statistic:", adf_result[0])
-        conditional_print(verbose, "p-value:", adf_result[1])
-        conditional_print(verbose, "Critical Values:")
-        
-        for key, value in adf_result[4].items():
-            conditional_print(verbose, f"\t{key}: {value}")
+        adf_stat, p_value = adf_result[0], adf_result[1]
+        critical_val = adf_result[4][crit_key]
 
-        if adf_result[1] < alpha and adf_result[0] < adf_result[4]['5%']:
-            conditional_print(verbose, "\nADF test outcome: The series is stationary.\n")
-            break
-        else:
-            d += 1
-            df_diff = df_diff.diff()
-    
-    if verbose:
-        print("\n===== ACF and PACF Plots =====")
-        plot_acf(df_diff.dropna())
-        plt.show()
-        
-        plot_pacf(df_diff.dropna())
-        plt.show()
+        print(f"\nTest su serie differenziata (d={d}):")
+        print(f"  ADF Statistic: {adf_stat:.4f}")
+        print(f"  p-value:       {p_value:.4f}")
+        print("  Valori Critici:")
+        for k, v in adf_result[4].items():
+            print(f"    {k}: {v}")
 
-    return d
+        if p_value < alpha and adf_stat < critical_val:
+            print(f"\nLa serie è risultata stazionaria con d={d}.")
+            return d
+
+    print(f"\nNon è stata raggiunta la stazionarietà entro d={max_diff}.")
+    return max_diff
 
 
 def ljung_box_test(residuals):
@@ -185,7 +211,7 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     :param D: Order of seasonal differencing.
     """
 
-    # Plot the time series
+    """# Plot the time series
     df = df.applymap(lambda x: x.replace(',', '.') if isinstance(x, str) else x)
     df[target_column] = df[target_column].apply(lambda x: float(x.replace(',', '.')) if isinstance(x, str) else x)
     plt.plot(df['date'], df[target_column], 'b')
@@ -205,7 +231,7 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     plt.tight_layout()
     plt.show()
 
-    # Plot the time series 1 giorno
+    #     # Plot the time series 1 giorno
     df = df.applymap(lambda x: x.replace(',', '.') if isinstance(x, str) else x)
     df[target_column] = df[target_column].apply(lambda x: float(x.replace(',', '.')) if isinstance(x, str) else x)
     plt.plot(df['date'].iloc[:24], df[target_column].iloc[:24], 'b')
@@ -269,16 +295,14 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     plt.xlabel("Day and 15-minute interval")
     plt.ylabel(f"Number of {target_column}")
     plt.tight_layout()
-    plt.show()
+    plt.show()"""
 
-    adf_d = adf_test(df=df[target_column], verbose=True)
+    adf_d = adf_test(df=df[target_column])
     print(f"Suggested d from Dickey-Fuller Test: {adf_d}")
 
 
-    adf_d = adf_test(df=df[target_column], verbose=True)
-    print(f"Suggested d from Dickey-Fuller Test: {adf_d}")
     
-    # Plot ACF and PACF for the original series
+    """# Plot ACF and PACF for the original series
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     plot_acf(df[target_column], lags=seasonal_period + 4, ax=axes[0, 0])
     axes[0, 0].set_title('ACF of Original Series')
@@ -378,5 +402,5 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     plt.tight_layout()
     # Add title
     plt.suptitle(f"Time Series Decomposition of differenced series with period {seasonal_period}")
-    plt.show()
+    plt.show()"""
     

@@ -136,7 +136,7 @@ def main():
             time_s_analysis(df, args.target_column, args.period, d=1, D=0)
             train, test, exit = data_preprocessor.preprocess_data()
 
-            multiple_STL(train, args.target_column)
+            #multiple_STL(train, args.target_column)
             return 0
 
         ############## End of time series analysis ###########
