@@ -1,27 +1,8 @@
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 import sys, os
-
-from tools.time_series_analysis import ljung_box_test
-
-# pmdarima
-import pmdarima
-from pmdarima import ARIMA
 from pmdarima import auto_arima
-
-# statsmodels
-import statsmodels
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.tsa.stattools import kpss
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-from statsmodels.tsa.seasonal import seasonal_decompose
-
-
-
-from tqdm import tqdm
-import pickle
 from Predictors.Predictor import Predictor
 
 
@@ -48,7 +29,6 @@ class ARIMA_Predictor(Predictor):
         self.ARIMA_order = []
         self.model = None
 
-        
 
     def train_model(self):
         """
@@ -59,12 +39,12 @@ class ARIMA_Predictor(Predictor):
         try:
 
             # Selection of the model with best AIC score
-            model = auto_arima(
+            """model = auto_arima(
                         y=self.train[self.target_column],
                         start_p=0,
                         start_q=0,
-                        max_p=3,
-                        max_q=3,
+                        max_p=10,
+                        max_q=10,
                         seasonal=False,
                         test='adf',
                         d=None,  # Let auto_arima determine the optimal 'd'
@@ -72,12 +52,12 @@ class ARIMA_Predictor(Predictor):
                         error_action='warn',  # Show warnings for troubleshooting
                         suppress_warnings=False,
                         stepwise=True
-                        )
+                        )"""
             
             # for debug
-            #order = (4, 1, 4)
+            order = (4, 1, 4)
 
-            order = model.order
+            #order = model.order
 
             print(f"Best order found: {order}")
             self.ARIMA_order = order
@@ -94,6 +74,7 @@ class ARIMA_Predictor(Predictor):
             """# Running the LJUNG-BOX test for residual correlation
             residuals = model.resid()
             ljung_box_test(residuals)"""
+
             print("Model successfully trained.")
             valid_metrics = None
             last_index = self.train.index[-1]
@@ -121,12 +102,9 @@ class ARIMA_Predictor(Predictor):
             self.steps_ahead = self.test.shape[0]
             
             self.forecast_type = forecast_type
-            test = self.test
-
-            predictions = []
 
             if self.forecast_type == 'ol-one':
-                steps = 1
+                predictions = []
                 for t in range(0, self.steps_ahead):
                     # Forecast one step at a time
                     y_hat = self.model.forecast()
@@ -139,13 +117,18 @@ class ARIMA_Predictor(Predictor):
                         self.model = self.model.append([y], refit=True)
                     else:
                         self.model = self.model.append([y], refit=False)
+
+                predictions = pd.DataFrame( [y_hat.iloc[0] for y_hat in predictions],
+                                            columns=[self.target_column]
+                                          )
                 print("Model testing successful.")
 
             elif self.forecast_type == 'ol-multi':
-                # To be implemented...
+                predictions = self.model.forecast(steps=len(self.test))
+                predictions = predictions.reset_index(drop=True).to_frame(name=self.target_column)
+
                 print("Model testing successful.")
 
-            predictions = pd.DataFrame([x[0] for x in predictions], columns=[self.target_column])
             return predictions
             
         except Exception as e:

@@ -9,7 +9,7 @@ from tools.data_preprocessing import DataPreprocessor
 from tools.data_loader import DataLoader
 from tools.performance_measurement import PerfMeasure
 from tools.utilities import save_buffer, load_trained_model
-from tools.time_series_analysis import time_s_analysis, multiple_STL, prepare_seasonal_sets
+from tools.time_series_analysis import time_s_analysis, multiple_STL
 
 from Predictors.ARIMA_model import ARIMA_Predictor
 from Predictors.SARIMA_model import SARIMA_Predictor
@@ -162,10 +162,6 @@ def main():
                                     args.verbose, args.seasonal_model, args.input_len, args.output_len,
                                     args.forecast_type, args.period)
 
-            case 'HYBRID':
-                hybrid = Hybrid_Predictor(args.run_mode, args.input_len, args.output_len, args.target_column,
-                                          args.period,
-                                          args.verbose, args.forecast_type)
 
             case 'NAIVE':
                 naive = NAIVE_Predictor(args.run_mode, args.target_column,
@@ -273,31 +269,6 @@ def main():
 
                     xgb.prepare_data(train, test)
 
-                case 'HYBRID':
-                    train, test, exit = data_preprocessor.preprocess_data()
-                    # Remove date duplicates in order to avoid error from asfreq call
-                    train = train[~train.index.duplicated(keep='first')]
-                    train = train.asfreq(args.data_freq)
-
-                    train = train.interpolate()
-
-                    """valid = valid[~valid.index.duplicated(keep='first')]
-                    valid = valid.asfreq(args.data_freq)
-
-                    valid = valid.interpolate()"""
-
-                    test = test[~test.index.duplicated(keep='first')]
-                    test = test.asfreq(args.data_freq)
-
-                    test = test.interpolate()
-
-                    train = train.applymap(lambda x: x.replace(',', '.') if isinstance(x, str) else x)
-                    test = test.applymap(lambda x: x.replace(',', '.') if isinstance(x, str) else x)
-
-                    if exit:
-                        raise ValueError("Unable to preprocess dataset.")
-
-                    hybrid.prepare_data(train, None, test)
 
                 case 'NAIVE':
                     train, test, exit = data_preprocessor.preprocess_data()
@@ -351,20 +322,6 @@ def main():
                     # Save the model
                     # ...
 
-                case 'HYBRID':
-                    sarima_model, lstm_model, predictions, scaler = hybrid.train_model(args.input_len, args.output_len)
-
-                    best_order = hybrid.SARIMA_order
-
-                    # Scale test and predictions
-
-                    predictions[predictions.columns] = scaler.transform(predictions[predictions.columns])
-
-                    test = test.applymap(lambda x: x.replace(',', '.') if isinstance(x, str) else x)
-                    test[test.columns[0:test.columns.shape[0] - 1]] = scaler.transform(
-                        test[test.columns[0:test.columns.shape[0] - 1]])
-                    # Save the model
-                    hybrid.save_model(folder_path)
 
             #################### END OF MODEL TRAINING ####################
 
@@ -489,11 +446,6 @@ def main():
 
                     pd.Series(predictions).to_csv('raw_data.csv', index=False)
 
-                case 'HYBRID':
-
-                    predictions = predictions[args.target_column]
-
-                    pd.Series(predictions).to_csv('raw_data.csv', index=False)
 
                 case 'NAIVE':
                     if args.seasonal_model:
@@ -535,9 +487,6 @@ def main():
                 case 'XGB':
                     xgb.plot_predictions(predictions)
 
-                case 'HYBRID':
-                    hybrid.plot_predictions(predictions, test)
-
                 case 'NAIVE':
                     naive.plot_predictions(predictions)
 
@@ -573,12 +522,6 @@ def main():
                     metrics = perf_measure.get_performance_metrics(test[args.target_column], predictions)
                     # Save metrics
                     xgb.save_metrics(folder_path, metrics)
-
-                case 'HYBRID':
-                    # Compute performance metrics
-                    metrics = perf_measure.get_performance_metrics(test[args.target_column], predictions)
-                    # Save metrics
-                    hybrid.save_metrics(folder_path, metrics)
 
                 case 'NAIVE':
                     # Save metrics

@@ -1,11 +1,7 @@
-import matplotlib.pyplot as plt
 from itertools import product
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.statespace.sarimax import SARIMAX
 from tqdm import tqdm
 from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import kpss
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.seasonal import MSTL, STL, seasonal_decompose
@@ -26,80 +22,208 @@ def conditional_print(verbose, *args, **kwargs):
     if verbose:
         print(*args, **kwargs)
 
-def adf_test(df, alpha=0.05, max_diff=3):
+def adf_test(series, alpha=0.05, max_diff=3, verbose=True):
     """
-    Esegue il test di Dickey-Fuller (ADF) per valutare se una serie è stazionaria
-    e restituisce il numero di differenziazioni necessarie.
-    Stampa inoltre i dettagli dei risultati ad ogni step.
+    Esegue il test ADF (Augmented Dickey-Fuller) in modo iterativo, aumentando
+    il numero di differenziazioni fino a trovare la stazionarietà o raggiungere max_diff.
 
     Parametri
     ----------
-    df : pandas.DataFrame o pandas.Series
-        La serie temporale da analizzare. Se è un DataFrame, si considera la prima colonna.
+    series : pd.Series o pd.DataFrame
+        Serie temporale da testare. Se è un DataFrame con più colonne,
+        viene considerata la prima colonna .iloc[:, 0].
     alpha : float, opzionale
-        Il livello di significatività desiderato (default=0.05).
+        Livello di significatività (default=0.05).
     max_diff : int, opzionale
         Numero massimo di differenziazioni da provare (default=3).
+    verbose : bool, opzionale
+        Se True, stampa i risultati di ogni passaggio (default=True).
 
     Ritorno
     -------
-    int
-        Il numero di differenziazioni richiesto per rendere stazionaria la serie
-        (se entro max_diff). Se non viene raggiunta la stazionarietà entro max_diff,
-        restituisce max_diff.
+    dict
+        Un dizionario con i campi:
+        - 'd': il numero di differenziazioni con cui si ottiene la stazionarietà
+               (oppure max_diff se non si ottiene entro tale soglia).
+        - 'Test Statistic': valore ADF dell'ultimo test eseguito.
+        - 'p-value': p-value dell'ultimo test.
+        - 'Critical Values': i valori critici dell'ultimo test.
+        - 'Stationary': booleano che indica se la serie risulta stazionaria
+                        all'uscita della funzione.
     """
-    # Se df è un DataFrame multi-colonna, consideriamo la prima colonna
-    if isinstance(df, pd.DataFrame):
-        df = df.iloc[:, 0]
+    # Se passiamo un DataFrame, prendiamo la prima colonna
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
 
-    print("Test di stazionarietà in corso...\n")
+    # Mappa alpha -> chiave corrispondente nei valori critici di ADF (1%, 5%, 10%)
+    alpha_mapping = {0.01: '1%', 0.05: '5%', 0.1: '10%'}
+    crit_key = alpha_mapping.get(alpha, '5%')  # di default usiamo '5%' se non trova corrispondenza
 
-    # Mappa alpha al corrispondente valore critico
-    critical_mapping = {0.01: '1%', 0.05: '5%', 0.1: '10%'}
-    crit_key = critical_mapping.get(alpha, '5%')
+    # Copia della serie (per differenziazioni successive)
+    current_series = series.copy()
 
-    d = 0  # contatore di differenziazioni
+    # Risultati finali
+    final_result = {
+        'd': 0,
+        'Test Statistic': None,
+        'p-value': None,
+        'Critical Values': {},
+        'Stationary': False
+    }
 
-    # -- Test sulla serie originale (d=0)
-    adf_result = adfuller(df.dropna())
-    adf_stat, p_value = adf_result[0], adf_result[1]
-    critical_val = adf_result[4][crit_key]
+    for d in range(max_diff + 1):
+        # Eseguiamo ADF sulla serie differenziata d volte
+        # (se d=0, è la serie originale)
+        adf_result = adfuller(current_series.dropna(), autolag='AIC')
+        adf_stat, p_value, used_lag, nobs, crit_vals, icbest = adf_result
 
-    print(f"Test su serie originale (d={d}):")
-    print(f"  ADF Statistic: {adf_stat:.4f}")
-    print(f"  p-value:       {p_value:.10f}")
-    print("  Valori Critici:")
-    for k, v in adf_result[4].items():
-        print(f"    {k}: {v}")
+        # Prepariamo informazioni per output
+        if verbose:
+            print(f"Test ADF con differenziazione d={d}")
+            print(f"  ADF Statistic: {adf_stat:.4f}")
+            print(f"  p-value:       {p_value:.4f}")
+            print(f"  Valori critici:")
+            for k, v in crit_vals.items():
+                print(f"    {k}: {v}")
 
-    # Verifica di stazionarietà
-    if p_value < alpha and adf_stat < critical_val:
-        print("\nLa serie è già stazionaria (d=0).")
-        return d
+        # Valore critico corrispondente alla soglia alpha selezionata (default 5%)
+        critical_val = crit_vals.get(crit_key, crit_vals['5%'])  # fallback su '5%' se chiave non trovata
 
-    # -- Itera con differenze successive fino a max_diff
-    df_diff = df.copy()
-    for i in range(1, max_diff + 1):
-        d = i
-        df_diff = df_diff.diff()  # differenza cumulativa
+        # Criterio combinato: p-value < alpha e adf_stat < critical_val -> stazionaria
+        is_stationary = (p_value < alpha) and (adf_stat < critical_val)
 
-        adf_result = adfuller(df_diff.dropna())
-        adf_stat, p_value = adf_result[0], adf_result[1]
-        critical_val = adf_result[4][crit_key]
+        # Aggiorno i risultati
+        final_result['d'] = d
+        final_result['Test Statistic'] = adf_stat
+        final_result['p-value'] = p_value
+        final_result['Critical Values'] = crit_vals
+        final_result['Stationary'] = is_stationary
 
-        print(f"\nTest su serie differenziata (d={d}):")
-        print(f"  ADF Statistic: {adf_stat:.4f}")
-        print(f"  p-value:       {p_value:.4f}")
-        print("  Valori Critici:")
-        for k, v in adf_result[4].items():
-            print(f"    {k}: {v}")
+        if is_stationary:
+            if verbose:
+                print(f"\n=> d value for ADF stationarity: {d}.\n")
+            break
+        else:
+            if d < max_diff:
+                # Differenziamo nuovamente la serie per il prossimo giro
+                current_series = current_series.diff()
+            else:
+                if verbose:
+                    print(f"\n=> Non si è raggiunta la stazionarietà entro d={max_diff}.\n")
 
-        if p_value < alpha and adf_stat < critical_val:
-            print(f"\nLa serie è risultata stazionaria con d={d}.")
-            return d
+    return final_result
 
-    print(f"\nNon è stata raggiunta la stazionarietà entro d={max_diff}.")
-    return max_diff
+def kpss_test(series, alpha=0.05, regression='c'):
+    """
+    Esegue il test KPSS (Kwiatkowski-Phillips-Schmidt-Shin) su una serie temporale.
+
+    Parametri
+    ----------
+    series : array-like, pandas Series/DataFrame
+        Serie temporale su cui eseguire il test.
+    alpha : float, opzionale
+        Livello di significatività desiderato (default=0.05).
+    regression : str, opzionale
+        Specifica il tipo di 'regression' da usare nel test:
+        - 'c' per stationarietà attorno a una costante (default)
+        - 'ct' per stationarietà attorno a costante + trend
+
+    Ritorno
+    -------
+    dict
+        Un dizionario con:
+        - 'Test Statistic': valore della statistica KPSS
+        - 'p-value': p-value associato
+        - 'n_lags': numero di lags usati
+        - 'Critical Values': dizionario dei valori critici
+        - 'Stationary': booleano che indica se, a livello alpha, non si respinge l'ipotesi di stazionarietà
+    """
+    # Esegue il test KPSS
+    statistic, p_value, n_lags, critical_values = kpss(series.dropna(), regression=regression)
+
+    # Scelta del valore critico in base ad alpha
+    # Nota: i critical values del KPSS di solito sono forniti per 10%, 5%, 2.5%, 1%
+    # Se alpha non è direttamente tra questi, ci si deve approssimare o fissare una soglia.
+    # Qui facciamo un esempio per alpha = 0.05 e i corrispondenti critical values '5%'.
+    crit_key = None
+    # Cerchiamo la chiave "più vicina" a alpha in critical_values
+    # (ad es. se alpha=0.05, useremo '5%'; se alpha=0.1, useremo '10%'; ecc.)
+    available_levels = [float(k.strip('%'))/100 for k in critical_values.keys()]  # es. [0.1, 0.05, 0.025, 0.01]
+    if alpha in available_levels:
+        # Se alpha è esattamente uno dei livelli presenti
+        crit_key = f"{int(alpha*100)}%"
+    else:
+        # Trova la chiave più vicina (in difetto o eccesso) – semplifichiamo con min() sul differenziale
+        best_match = min(available_levels, key=lambda x: abs(x - alpha))
+        crit_key = f"{int(best_match*100)}%"
+
+    # Verifichiamo se "non respingiamo" l'ipotesi nulla (serie stazionaria) a livello alpha
+    # Il KPSS ha ipotesi nulla: la serie è stazionaria (a differenza di ADF).
+    # Se la statistica > valore critico => respinge l'ipotesi di stazionarietà
+    if crit_key in critical_values:
+        stationary_decision = statistic < critical_values[crit_key]
+    else:
+        # Se, ad esempio, alpha non è presente tra i valori critici, facciamo un check con la più vicina
+        stationary_decision = statistic < critical_values[list(critical_values.keys())[0]]  # fallback
+
+    results = {
+        'Test Statistic': statistic,
+        'p-value': p_value,
+        'n_lags': n_lags,
+        'Critical Values': critical_values,
+        'Stationary': stationary_decision
+    }
+
+    return results
+
+
+def pp_test(series, alpha=0.05):
+    """
+    Esegue il test Phillips-Perron (PP) su una serie temporale.
+
+    Parametri
+    ----------
+    series : array-like, pandas Series/DataFrame
+        Serie temporale su cui eseguire il test.
+    alpha : float, opzionale
+        Livello di significatività desiderato (default=0.05).
+
+    Ritorno
+    -------
+    dict
+        Un dizionario con:
+        - 'Test Statistic': valore della statistica PP
+        - 'p-value': p-value associato
+        - 'Critical Values': dizionario dei valori critici
+        - 'Stationary': booleano che indica se, a livello alpha, si respinge l'ipotesi di radice unitaria
+          (quindi, se True, suggerisce stazionarietà in termini di radice unitaria).
+    """
+    # Esegue il test Phillips-Perron
+    # Il risultato è un oggetto di tipo 'PhillipsPerronTestResults'
+    # che contiene statistic, pvalue, critical_values, ...
+    pp_result = phillips_perron(series.dropna())
+
+    statistic = pp_result.stat
+    p_value = pp_result.pvalue
+    critical_values = pp_result.critical_values
+
+    # Mappatura semplificata di alpha -> chiave corrispondente
+    # I valori critici forniti da PP spesso sono '1%', '5%', '10%'.
+    mapping = {0.01: '1%', 0.05: '5%', 0.1: '10%'}
+    crit_key = mapping.get(alpha, '5%')  # default 5% se alpha non corrisponde
+
+    # Se la statistica è minore del valore critico (ed il p-value < alpha),
+    # si respinge l'ipotesi nulla di radice unitaria, quindi la serie è (secondo PP) stazionaria.
+    stationary_decision = (p_value < alpha) and (statistic < critical_values[crit_key])
+
+    results = {
+        'Test Statistic': statistic,
+        'p-value': p_value,
+        'Critical Values': critical_values,
+        'Stationary': stationary_decision
+    }
+
+    return results
 
 
 def ljung_box_test(residuals):
@@ -151,55 +275,6 @@ def multiple_STL(dataframe,target_column):
     plt.show()
 
 
-def prepare_seasonal_sets(train, valid, test, target_column, period):
-    """
-    Decomposes the datasets into seasonal and residual components based on the specified period.
-
-    :param train: Training dataset.
-    :param valid: Validation dataset.
-    :param test: Test dataset.
-    :param target_column: The target column in the datasets.
-    :param period: The period for seasonal decomposition.
-    :return: Decomposed training, validation, and test datasets.
-    """
-    
-    # Seasonal and residual components of the training set
-    train_seasonal = pd.DataFrame(seasonal_decompose(train[target_column], model='additive', period=period).seasonal) 
-    train_seasonal.rename(columns = {'seasonal': target_column}, inplace = True)
-    train_seasonal = train_seasonal.dropna()
-    train_residual = pd.DataFrame(seasonal_decompose(train[target_column], model='additive', period=period).resid)
-    train_residual.rename(columns = {'resid': target_column}, inplace = True)
-    train_residual = train_residual.dropna()
-    # Seasonal and residual components of the validation set
-    valid_seasonal = pd.DataFrame(seasonal_decompose(valid[target_column], model='additive', period=period).seasonal)
-    valid_seasonal.rename(columns = {'seasonal': target_column}, inplace = True)
-    valid_seasonal = valid_seasonal.dropna()
-    valid_residual = pd.DataFrame(seasonal_decompose(valid[target_column], model='additive', period=period).resid)
-    valid_residual.rename(columns = {'resid': target_column}, inplace = True)
-    valid_residual = valid_residual.dropna()
-    # Seasonal and residual components of the test set
-    test_seasonal = pd.DataFrame(seasonal_decompose(test[target_column], model='additive', period=period).seasonal)
-    test_seasonal.rename(columns = {'seasonal': target_column}, inplace = True)
-    test_seasonal = test_seasonal.dropna()
-    test_residual = pd.DataFrame(seasonal_decompose(test[target_column], model='additive', period=period).resid)
-    test_residual.rename(columns = {'resid': target_column}, inplace = True)
-    test_residual = test_residual.dropna()
-
-    # Merge residual and seasonal components on indices with 'inner' join to keep only matching rows
-    train_merge = pd.merge(train_residual, train_seasonal, left_index=True, right_index=True, how='inner')
-    valid_merge = pd.merge(valid_residual, valid_seasonal, left_index=True, right_index=True, how='inner')
-    test_merge = pd.merge(test_residual, test_seasonal, left_index=True, right_index=True, how='inner')
-    
-    # Add the residual and seasonal columns
-    train_decomposed = pd.DataFrame(train_merge.iloc[:,0] + train_merge.iloc[:,1])
-    train_decomposed = train_decomposed.rename(columns = {train_decomposed.columns[0]: target_column})
-    valid_decomposed = pd.DataFrame(valid_merge.iloc[:,0] + valid_merge.iloc[:,1])
-    valid_decomposed = valid_decomposed.rename(columns = {valid_decomposed.columns[0]: target_column})
-    test_decomposed = pd.DataFrame(test_merge.iloc[:,0] + test_merge.iloc[:,1])
-    test_decomposed = test_decomposed.rename(columns = {test_decomposed.columns[0]: target_column})
-
-    return train_decomposed, valid_decomposed, test_decomposed
-
 def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     """
     Performs ACF and PACF analysis on the original and differentiated time series based on provided orders of differencing.
@@ -211,7 +286,27 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     :param D: Order of seasonal differencing.
     """
 
-    """# Plot the time series
+    ######### STATISTICAL TESTS ######
+
+    adf_results = adf_test(series=df[target_column])
+    kpss_results = kpss_test(df[target_column], alpha=0.05, regression='c')
+
+
+    if adf_results['Stationary'] and kpss_results['Stationary']:
+        print(f"La serie è stazionaria.")
+    elif adf_results['Stationary'] and (not kpss_results['Stationary']):
+        print(f"La serie è stazionaria secondo il test ADF, e non stazionaria secondo il test kpss.")
+    elif (not adf_results['Stationary']) and (kpss_results['Stationary']):
+        print(f"La serie è non stazionaria secondo il test ADF, e stazionaria secondo il test kpss.")
+    else:
+        print(f"La serie non è risultata stazionaria.")
+
+    kpss_results_diff = kpss_test(df.diff()[target_column], alpha=0.05, regression='c')
+
+    if kpss_results_diff['Stationary']:
+        print(f"Serie differenziata stazionaria secondo il test kpss.")
+
+    # Plot the time series
     df = df.applymap(lambda x: x.replace(',', '.') if isinstance(x, str) else x)
     df[target_column] = df[target_column].apply(lambda x: float(x.replace(',', '.')) if isinstance(x, str) else x)
     plt.plot(df['date'], df[target_column], 'b')
@@ -245,7 +340,7 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     df['minutes'] = df.index.hour * 60 + df.index.minute
     df['hours'] = df.index.hour + df.index.minute / 60
 
-    # Creazione di un grafico per ciascun giorno della settimana
+    """# Creazione di un grafico per ciascun giorno della settimana 
 
     week_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -259,7 +354,7 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
         plt.ylabel('Value')
         plt.xticks(rotation=45)
         plt.tight_layout()
-        plt.show()
+        plt.show()"""
 
     # Distribution by month
     df['month'] = df.index.month
@@ -285,7 +380,7 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     plt.title(f'{target_column} Distribution by Hour of the Day', fontsize=9)
     plt.show()
 
-    # Distribution by week day and 15-minute interval of the day
+    """# Distribution by week day and 15-minute interval of the day
     df['interval_day'] = df.index.hour * 4 + df.index.minute // 15 + 1
     mean_day_interval = df.groupby(["week_day", "interval_day"])[target_column].mean()
 
@@ -297,12 +392,9 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     plt.tight_layout()
     plt.show()"""
 
-    adf_d = adf_test(df=df[target_column])
-    print(f"Suggested d from Dickey-Fuller Test: {adf_d}")
+    #pp_results = pp_test(df[target_column], alpha=0.05)
 
-
-    
-    """# Plot ACF and PACF for the original series
+    # Plot ACF and PACF for the original series
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     plot_acf(df[target_column], lags=seasonal_period + 4, ax=axes[0, 0])
     axes[0, 0].set_title('ACF of Original Series')
@@ -402,5 +494,5 @@ def time_s_analysis(df, target_column, seasonal_period, d = 0, D = 0):
     plt.tight_layout()
     # Add title
     plt.suptitle(f"Time Series Decomposition of differenced series with period {seasonal_period}")
-    plt.show()"""
+    plt.show()
     
